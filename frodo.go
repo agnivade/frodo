@@ -10,10 +10,9 @@ package frodo
 #include <liburing.h>
 #include <stdlib.h>
 
-extern off_t get_file_size(int);
-extern int get_completion_and_print(struct io_uring *);
-extern int submit_read_request(int, off_t, struct io_uring *);
 extern int cat_file(int, off_t);
+extern int queue_init();
+extern void queue_exit();
 */
 import "C"
 
@@ -27,6 +26,18 @@ import (
 func printToConsole(cstr *C.char) {
 	str := C.GoString(cstr)
 	fmt.Println(str)
+}
+
+func Init() error {
+	ret := int(C.queue_init())
+	if ret < 0 {
+		return fmt.Errorf("queue init failed with %d exit code", ret)
+	}
+	return nil
+}
+
+func Cleanup() {
+	C.queue_exit()
 }
 
 func Hello(path string) error {

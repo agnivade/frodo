@@ -1,7 +1,9 @@
 #include "_cgo_export.h"
 
-#define QUEUE_DEPTH 1
+#define QUEUE_DEPTH 16
 #define BLOCK_SZ    1024
+
+struct io_uring ring;
 
 struct file_info {
     off_t file_sz;
@@ -74,10 +76,15 @@ int submit_read_request(int file_fd, off_t file_sz, struct io_uring *ring) {
     return 0;
 }
 
-int cat_file(int fd, off_t file_sz) {
-    struct io_uring ring;
-    io_uring_queue_init(QUEUE_DEPTH, &ring, 0);
+int queue_init() {
+    return io_uring_queue_init(QUEUE_DEPTH, &ring, 0);
+}
 
+void queue_exit() {
+    io_uring_queue_exit(&ring);
+}
+
+int cat_file(int fd, off_t file_sz) {
     int ret = submit_read_request(fd, file_sz, &ring);
     if (ret) {
         fprintf(stderr, "Error reading from fd: %d\n", fd);
@@ -85,6 +92,5 @@ int cat_file(int fd, off_t file_sz) {
     }
     get_completion_and_print(&ring);
 
-    io_uring_queue_exit(&ring);
     return 0;
 }
