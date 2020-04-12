@@ -10,9 +10,9 @@ struct file_info {
     struct iovec iovecs[];
 };
 
-int get_completion_and_print(struct io_uring *ring) {
+int wait() {
     struct io_uring_cqe *cqe;
-    int ret = io_uring_wait_cqe(ring, &cqe);
+    int ret = io_uring_wait_cqe(&ring, &cqe);
     if (ret < 0) {
         perror("io_uring_wait_cqe");
         return 1;
@@ -27,11 +27,11 @@ int get_completion_and_print(struct io_uring *ring) {
     for (int i = 0; i < blocks; i ++)
         printToConsole(fi->iovecs[i].iov_base);
 
-    io_uring_cqe_seen(ring, cqe);
+    io_uring_cqe_seen(&ring, cqe);
     return 0;
 }
 
-int submit_read_request(int file_fd, off_t file_sz, struct io_uring *ring) {
+int submit_read_request(int file_fd, off_t file_sz) {
     off_t bytes_remaining = file_sz;
     off_t offset = 0;
     int current_block = 0;
@@ -65,13 +65,13 @@ int submit_read_request(int file_fd, off_t file_sz, struct io_uring *ring) {
     fi->file_sz = file_sz;
 
     /* Get an SQE */
-    struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
+    struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
     /* Setup a readv operation */
     io_uring_prep_readv(sqe, file_fd, fi->iovecs, blocks, 0);
     /* Set user data */
     io_uring_sqe_set_data(sqe, fi);
     /* Finally, submit the request */
-    io_uring_submit(ring);
+    io_uring_submit(&ring);
 
     return 0;
 }
@@ -82,15 +82,4 @@ int queue_init() {
 
 void queue_exit() {
     io_uring_queue_exit(&ring);
-}
-
-int cat_file(int fd, off_t file_sz) {
-    int ret = submit_read_request(fd, file_sz, &ring);
-    if (ret) {
-        fprintf(stderr, "Error reading from fd: %d\n", fd);
-        return 1;
-    }
-    get_completion_and_print(&ring);
-
-    return 0;
 }
