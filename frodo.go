@@ -13,6 +13,7 @@ package frodo
 extern int queue_init();
 extern int submit_read_request(int, off_t);
 extern int wait();
+extern int queue_submit();
 extern void queue_exit();
 */
 import "C"
@@ -78,8 +79,12 @@ func startLoop() {
 
 			queueSize++
 			if queueSize > 5 {
+				ret = int(C.queue_submit())
+				if ret < 0 {
+					fmt.Printf("non-zero return code: %d\n", ret)
+					return
+				}
 				for queueSize > 0 {
-					fmt.Println("working from loop")
 					ret = int(C.wait())
 					if ret != 0 {
 						fmt.Printf("non-zero return code: %d\n", ret)
@@ -91,8 +96,12 @@ func startLoop() {
 			}
 		case <-ticker.C: // some timer of some interval
 			if queueSize > 0 {
+				ret := int(C.queue_submit())
+				if ret < 0 {
+					fmt.Printf("non-zero return code: %d\n", ret)
+					return
+				}
 				for queueSize > 0 {
-					fmt.Println("working from ticker")
 					ret := int(C.wait())
 					if ret != 0 {
 						fmt.Printf("non-zero return code: %d\n", ret)
@@ -110,16 +119,15 @@ func startLoop() {
 	}
 }
 
-func Hello(path string) error {
+func Hello(path string) (error, func() error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return err
+		return err, nil
 	}
-	defer f.Close()
 
 	fi, err := f.Stat()
 	if err != nil {
-		return err
+		return err, f.Close
 	}
 
 	submitChan <- &request{
@@ -127,5 +135,5 @@ func Hello(path string) error {
 		fd:   f.Fd(),
 		size: fi.Size(),
 	}
-	return nil
+	return nil, f.Close
 }

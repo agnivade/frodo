@@ -70,10 +70,11 @@ int submit_read_request(int file_fd, off_t file_sz) {
     io_uring_prep_readv(sqe, file_fd, fi->iovecs, blocks, 0);
     /* Set user data */
     io_uring_sqe_set_data(sqe, fi);
-    /* Finally, submit the request */
-    io_uring_submit(&ring);
-
     return 0;
+}
+
+int queue_submit() {
+    return io_uring_submit(&ring);
 }
 
 int queue_init() {
