@@ -7,11 +7,13 @@ struct io_uring ring;
 
 struct file_info {
     off_t file_sz;
+    int file_fd;
     struct iovec iovecs[];
 };
 
 int pop_request() {
     struct io_uring_cqe *cqe;
+    // Get from queue.
     int ret = io_uring_peek_cqe(&ring, &cqe);
     if (ret < 0) {
         fprintf(stderr, "bad ret.\n");
@@ -24,9 +26,11 @@ int pop_request() {
     struct file_info *fi = io_uring_cqe_get_data(cqe);
     int blocks = (int) fi->file_sz / BLOCK_SZ;
     if (fi->file_sz % BLOCK_SZ) blocks++;
-    for (int i = 0; i < blocks; i ++)
-        printToConsole(fi->iovecs[i].iov_base);
 
+    // Run callback.
+    read_callback(fi->iovecs, blocks, fi->file_fd);
+
+    // Mark as done.
     io_uring_cqe_seen(&ring, cqe);
     return 0;
 }
@@ -38,12 +42,13 @@ int push_request(int file_fd, off_t file_sz) {
     int blocks = (int) file_sz / BLOCK_SZ;
     if (file_sz % BLOCK_SZ) blocks++;
     struct file_info *fi = malloc(sizeof(*fi) + (sizeof(struct iovec) * blocks));
-    char *buff = malloc(file_sz);
-    if (!buff) {
+    char *buf = malloc(file_sz);
+    if (!buf) {
         fprintf(stderr, "Unable to allocate memory.\n");
-        return 1;
+        return -1;
     }
 
+    // Populate iovecs.
     while (bytes_remaining) {
         off_t bytes_to_read = bytes_remaining;
         if (bytes_to_read > BLOCK_SZ)
@@ -55,7 +60,7 @@ int push_request(int file_fd, off_t file_sz) {
         void *buf;
         if( posix_memalign(&buf, BLOCK_SZ, BLOCK_SZ)) {
             perror("posix_memalign");
-            return 1;
+            return -1;
         }
         fi->iovecs[current_block].iov_base = buf;
 
@@ -63,12 +68,11 @@ int push_request(int file_fd, off_t file_sz) {
         bytes_remaining -= bytes_to_read;
     }
     fi->file_sz = file_sz;
+    fi->file_fd = file_fd;
 
-    /* Get an SQE */
+    // Set the queue.
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
-    /* Setup a readv operation */
     io_uring_prep_readv(sqe, file_fd, fi->iovecs, blocks, 0);
-    /* Set user data */
     io_uring_sqe_set_data(sqe, fi);
     return 0;
 }

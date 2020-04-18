@@ -19,9 +19,12 @@ extern void queue_exit();
 import "C"
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"sync"
 	"time"
+	"unsafe"
 )
 
 type opCode int
@@ -39,15 +42,36 @@ type request struct {
 	size int64
 }
 
+type cbInfo struct {
+	cb    func([]byte)
+	close func() error
+}
+
 var (
 	quitChan   chan struct{}
 	submitChan chan *request
+	cbMut      sync.RWMutex
+	cbMap      map[uintptr]cbInfo
 )
 
-//export printToConsole
-func printToConsole(cstr *C.char) {
-	str := C.GoString(cstr)
-	fmt.Println(str)
+//export read_callback
+func read_callback(iovecs *C.struct_iovec, length C.int, fd C.int) {
+	// Here be dragons.
+	// defer C.free(unsafe.Pointer(iovecs)) // This makes it crash.
+	intLen := int(length)
+	slice := (*[1 << 28]C.struct_iovec)(unsafe.Pointer(iovecs))[:intLen:intLen]
+	// Can be optimized further with more unsafe.
+	var buf bytes.Buffer
+	for i := 0; i < intLen; i++ {
+		_, err := buf.Write(C.GoBytes(slice[i].iov_base, C.int(slice[i].iov_len)))
+		if err != nil {
+			fmt.Println("err while writing", err)
+		}
+	}
+	cbMut.RLock()
+	cbMap[uintptr(fd)].close()
+	cbMap[uintptr(fd)].cb(buf.Bytes())
+	cbMut.RUnlock()
 }
 
 func Init() error {
@@ -57,6 +81,7 @@ func Init() error {
 	}
 	quitChan = make(chan struct{})
 	submitChan = make(chan *request)
+	cbMap = make(map[uintptr]cbInfo)
 	go startLoop()
 	return nil
 }
@@ -75,7 +100,7 @@ func startLoop() {
 		case sqe := <-submitChan:
 			ret := int(C.push_request(C.int(sqe.fd), C.long(sqe.size)))
 			if ret < 0 {
-				fmt.Printf("non-zero return code: %d\n", ret)
+				fmt.Printf("non-zero return code while pushing: %d\n", ret)
 				continue
 			}
 
@@ -84,13 +109,13 @@ func startLoop() {
 				// TODO: maybe just pop one
 				ret = int(C.queue_submit(C.int(queueSize)))
 				if ret < 0 {
-					fmt.Printf("non-zero return code: %d\n", ret)
+					fmt.Printf("non-zero return code while submitting: %d\n", ret)
 					return
 				}
 				for queueSize > 0 {
 					ret = int(C.pop_request())
 					if ret != 0 {
-						fmt.Printf("non-zero return code: %d\n", ret)
+						fmt.Printf("non-zero return code while popping: %d\n", ret)
 						if ret != EAGAIN { // Do not decrement if nothing was read.
 							queueSize--
 						}
@@ -103,13 +128,13 @@ func startLoop() {
 			if queueSize > 0 {
 				ret := int(C.queue_submit(C.int(queueSize)))
 				if ret < 0 {
-					fmt.Printf("non-zero return code: %d\n", ret)
+					fmt.Printf("non-zero return code while submitting: %d\n", ret)
 					return
 				}
 				for queueSize > 0 {
 					ret := int(C.pop_request())
 					if ret != 0 {
-						fmt.Printf("non-zero return code: %d\n", ret)
+						fmt.Printf("non-zero return code while popping: %d\n", ret)
 						if ret != EAGAIN { // Do not decrement if nothing was read.
 							queueSize--
 						}
@@ -126,21 +151,28 @@ func startLoop() {
 	}
 }
 
-func Hello(path string) (error, func() error) {
+func ReadFile(path string, cb func(buf []byte)) error {
 	f, err := os.Open(path)
 	if err != nil {
-		return err, nil
+		return err
 	}
 
 	fi, err := f.Stat()
 	if err != nil {
-		return err, f.Close
+		return err
 	}
+
+	cbMut.Lock()
+	cbMap[f.Fd()] = cbInfo{
+		cb:    cb,
+		close: f.Close,
+	}
+	cbMut.Unlock()
 
 	submitChan <- &request{
 		code: opCodeRead,
 		fd:   f.Fd(),
 		size: fi.Size(),
 	}
-	return nil, f.Close
+	return nil
 }
