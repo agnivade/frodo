@@ -1,7 +1,7 @@
 #include "_cgo_export.h"
 
 #define QUEUE_DEPTH 16
-#define BLOCK_SZ    1024
+#define INITIAL_NUM_BLOCKS 7
 
 struct io_uring ring;
 
@@ -27,10 +27,18 @@ int pop_request() {
 
     struct file_info *fi = io_uring_cqe_get_data(cqe);
     if (fi->opcode == IORING_OP_READV) {
-        int blocks = (int) fi->file_sz / BLOCK_SZ;
-        if (fi->file_sz % BLOCK_SZ) blocks++;
+        int total_blocks = INITIAL_NUM_BLOCKS;
+        off_t initial_block_size = fi->file_sz / total_blocks;
+
+        if (initial_block_size == 0) {
+            total_blocks = 0;
+        }
+
+        if (fi->file_sz - initial_block_size*total_blocks > 0) {
+            total_blocks++;
+        }
         // Call read_callback to Go.
-        read_callback(fi->iovecs, blocks, fi->file_fd);
+        read_callback(fi->iovecs, total_blocks, fi->file_fd);
     } else if (fi->opcode == IORING_OP_WRITEV) {
         // Call write_callback to Go.
         write_callback(cqe->res, fi->file_fd);
@@ -42,55 +50,49 @@ int pop_request() {
 }
 
 int push_read_request(int file_fd, off_t file_sz) {
-    off_t bytes_remaining = file_sz;
-    off_t offset = 0;
-    int current_block = 0;
-    int blocks = (int) file_sz / BLOCK_SZ;
-    if (file_sz % BLOCK_SZ) blocks++;
-    struct file_info *fi = malloc(sizeof(*fi) + (sizeof(struct iovec) * blocks));
-    if (!fi) {
-        fprintf(stderr, "Unable to allocate memory\n");
-        return -1;
+    // aiming for 8 blocks. (https://www.oreilly.com/library/view/linux-system-programming/9781449341527/ch04.html)
+    int total_blocks = INITIAL_NUM_BLOCKS;
+    off_t last_block_size = 0;
+    off_t initial_block_size = file_sz / total_blocks;
+
+    if (initial_block_size == 0) {
+        total_blocks = 0;
     }
-    // char *buf = malloc(file_sz);
-    // if (!buf) {
-    //     fprintf(stderr, "Unable to allocate memory.\n");
-    //     return -1;
-    // }
 
+    if (file_sz - initial_block_size*total_blocks > 0) {
+        last_block_size = file_sz - initial_block_size*total_blocks;
+        total_blocks++;
+    }
+
+    struct file_info *fi = malloc(sizeof(*fi) + (sizeof(struct iovec) * total_blocks));
     // Populate iovecs.
-    while (bytes_remaining) {
-        off_t bytes_to_read = bytes_remaining;
-        if (bytes_to_read > BLOCK_SZ)
-            bytes_to_read = BLOCK_SZ;
-
-        offset += bytes_to_read;
-        fi->iovecs[current_block].iov_len = bytes_to_read;
-
+    for (int i=0; i < total_blocks; i++) {
+        off_t current_block_size = initial_block_size;
+        if (i == total_blocks-1) {
+            // last block, need to change the block size.
+            current_block_size = last_block_size;
+        }
+        fi->iovecs[i].iov_len = current_block_size;
         void *buf;
-        if( posix_memalign(&buf, BLOCK_SZ, BLOCK_SZ)) {
+        if(posix_memalign(&buf, 1024, current_block_size)) {
             perror("posix_memalign");
             return -1;
         }
-        fi->iovecs[current_block].iov_base = buf;
-
-        current_block++;
-        bytes_remaining -= bytes_to_read;
+        fi->iovecs[i].iov_base = buf;
     }
+
     fi->file_sz = file_sz;
     fi->file_fd = file_fd;
     fi->opcode = IORING_OP_READV;
 
     // Set the queue.
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
-    io_uring_prep_readv(sqe, file_fd, fi->iovecs, blocks, 0);
+    io_uring_prep_readv(sqe, file_fd, fi->iovecs, total_blocks, 0);
     io_uring_sqe_set_data(sqe, fi);
     return 0;
 }
 
 int push_write_request(int file_fd, void *data, off_t file_sz) {
-    off_t bytes_remaining = file_sz;
-    off_t offset = 0;
     struct file_info *fi = malloc(sizeof(*fi) + (sizeof(struct iovec) * 1));
 
     // TODO: split into multiple blocks.

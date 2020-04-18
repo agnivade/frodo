@@ -36,6 +36,7 @@ const (
 )
 
 const EAGAIN = -11
+const queueThreshold = 5
 
 type request struct {
 	code opCode
@@ -114,19 +115,19 @@ func startLoop() {
 			case opCodeRead:
 				ret := int(C.push_read_request(C.int(sqe.fd), C.long(sqe.size)))
 				if ret < 0 {
-					fmt.Printf("non-zero return code while pushing: %d\n", ret)
+					fmt.Printf("non-zero return code while pushing read: %d\n", ret)
 					continue
 				}
 			case opCodeWrite:
 				ret := int(C.push_write_request(C.int(sqe.fd), unsafe.Pointer(&sqe.buf[0]), C.long(len(sqe.buf))))
 				if ret < 0 {
-					fmt.Printf("non-zero return code while pushing: %d\n", ret)
+					fmt.Printf("non-zero return code while pushing write: %d\n", ret)
 					continue
 				}
 			}
 
 			queueSize++
-			if queueSize > 5 { // if queue_size > threshold, then pop all.
+			if queueSize > queueThreshold { // if queue_size > threshold, then pop all.
 				// TODO: maybe just pop one
 				ret := int(C.queue_submit(C.int(queueSize)))
 				if ret < 0 {
