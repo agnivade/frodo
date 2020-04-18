@@ -11,8 +11,8 @@ package frodo
 #include <stdlib.h>
 
 extern int queue_init();
-extern int submit_read_request(int, off_t);
-extern int wait();
+extern int push_request(int, off_t);
+extern int pop_request();
 extern int queue_submit();
 extern void queue_exit();
 */
@@ -71,21 +71,21 @@ func startLoop() {
 	for {
 		select {
 		case sqe := <-submitChan:
-			ret := int(C.submit_read_request(C.int(sqe.fd), C.long(sqe.size)))
+			ret := int(C.push_request(C.int(sqe.fd), C.long(sqe.size)))
 			if ret < 0 {
 				fmt.Printf("non-zero return code: %d\n", ret)
 				continue
 			}
 
 			queueSize++
-			if queueSize > 5 {
+			if queueSize > 5 { // if queue_size == queue_depth, then submit and pop 1.
 				ret = int(C.queue_submit())
 				if ret < 0 {
 					fmt.Printf("non-zero return code: %d\n", ret)
 					return
 				}
 				for queueSize > 0 {
-					ret = int(C.wait())
+					ret = int(C.pop_request())
 					if ret != 0 {
 						fmt.Printf("non-zero return code: %d\n", ret)
 						queueSize--
@@ -102,7 +102,7 @@ func startLoop() {
 					return
 				}
 				for queueSize > 0 {
-					ret := int(C.wait())
+					ret := int(C.pop_request())
 					if ret != 0 {
 						fmt.Printf("non-zero return code: %d\n", ret)
 						queueSize--
@@ -113,7 +113,7 @@ func startLoop() {
 			}
 		case <-quitChan:
 			// possibly drain channel.
-			// wait till everything is done.
+			// pop_request till everything is done.
 			return
 		}
 	}

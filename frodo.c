@@ -10,7 +10,7 @@ struct file_info {
     struct iovec iovecs[];
 };
 
-int wait() {
+int pop_request() {
     struct io_uring_cqe *cqe;
     int ret = io_uring_wait_cqe(&ring, &cqe);
     if (ret < 0) {
@@ -31,7 +31,7 @@ int wait() {
     return 0;
 }
 
-int submit_read_request(int file_fd, off_t file_sz) {
+int push_request(int file_fd, off_t file_sz) {
     off_t bytes_remaining = file_sz;
     off_t offset = 0;
     int current_block = 0;
