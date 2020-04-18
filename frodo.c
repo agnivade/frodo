@@ -12,14 +12,14 @@ struct file_info {
 
 int pop_request() {
     struct io_uring_cqe *cqe;
-    int ret = io_uring_wait_cqe(&ring, &cqe);
+    int ret = io_uring_peek_cqe(&ring, &cqe);
     if (ret < 0) {
-        perror("io_uring_wait_cqe");
-        return 1;
+        fprintf(stderr, "bad ret.\n");
+        return ret;
     }
     if (cqe->res < 0) {
-        fprintf(stderr, "Async readv failed.\n");
-        return 1;
+        fprintf(stderr, "bad res.\n");
+        return cqe->res;
     }
     struct file_info *fi = io_uring_cqe_get_data(cqe);
     int blocks = (int) fi->file_sz / BLOCK_SZ;
@@ -73,8 +73,8 @@ int push_request(int file_fd, off_t file_sz) {
     return 0;
 }
 
-int queue_submit() {
-    return io_uring_submit(&ring);
+int queue_submit(int num) {
+    return io_uring_submit_and_wait(&ring, num);
 }
 
 int queue_init() {

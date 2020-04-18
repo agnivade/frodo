@@ -13,7 +13,7 @@ package frodo
 extern int queue_init();
 extern int push_request(int, off_t);
 extern int pop_request();
-extern int queue_submit();
+extern int queue_submit(int);
 extern void queue_exit();
 */
 import "C"
@@ -30,6 +30,8 @@ const (
 	opCodeRead opCode = iota + 1
 	opCodeWrite
 )
+
+const EAGAIN = -11
 
 type request struct {
 	code opCode
@@ -78,8 +80,9 @@ func startLoop() {
 			}
 
 			queueSize++
-			if queueSize > 5 { // if queue_size == queue_depth, then submit and pop 1.
-				ret = int(C.queue_submit())
+			if queueSize > 5 { // if queue_size > threshold, then pop all.
+				// TODO: maybe just pop one
+				ret = int(C.queue_submit(C.int(queueSize)))
 				if ret < 0 {
 					fmt.Printf("non-zero return code: %d\n", ret)
 					return
@@ -88,7 +91,9 @@ func startLoop() {
 					ret = int(C.pop_request())
 					if ret != 0 {
 						fmt.Printf("non-zero return code: %d\n", ret)
-						queueSize--
+						if ret != EAGAIN { // Do not decrement if nothing was read.
+							queueSize--
+						}
 						continue
 					}
 					queueSize--
@@ -96,7 +101,7 @@ func startLoop() {
 			}
 		case <-ticker.C: // some timer of some interval
 			if queueSize > 0 {
-				ret := int(C.queue_submit())
+				ret := int(C.queue_submit(C.int(queueSize)))
 				if ret < 0 {
 					fmt.Printf("non-zero return code: %d\n", ret)
 					return
@@ -105,7 +110,9 @@ func startLoop() {
 					ret := int(C.pop_request())
 					if ret != 0 {
 						fmt.Printf("non-zero return code: %d\n", ret)
-						queueSize--
+						if ret != EAGAIN { // Do not decrement if nothing was read.
+							queueSize--
+						}
 						continue
 					}
 					queueSize--
