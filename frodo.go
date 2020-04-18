@@ -11,7 +11,8 @@ package frodo
 #include <stdlib.h>
 
 extern int queue_init();
-extern int push_request(int, off_t);
+extern int push_read_request(int, off_t);
+extern int push_write_request(int, void *, off_t);
 extern int pop_request();
 extern int queue_submit(int);
 extern void queue_exit();
@@ -39,12 +40,14 @@ const EAGAIN = -11
 type request struct {
 	code opCode
 	fd   uintptr
+	buf  []byte
 	size int64
 }
 
 type cbInfo struct {
-	cb    func([]byte)
-	close func() error
+	readCb  func([]byte)
+	writeCb func(int)
+	close   func() error
 }
 
 var (
@@ -70,7 +73,15 @@ func read_callback(iovecs *C.struct_iovec, length C.int, fd C.int) {
 	}
 	cbMut.RLock()
 	cbMap[uintptr(fd)].close()
-	cbMap[uintptr(fd)].cb(buf.Bytes())
+	cbMap[uintptr(fd)].readCb(buf.Bytes())
+	cbMut.RUnlock()
+}
+
+//export write_callback
+func write_callback(written C.int, fd C.int) {
+	cbMut.RLock()
+	cbMap[uintptr(fd)].close()
+	cbMap[uintptr(fd)].writeCb(int(written))
 	cbMut.RUnlock()
 }
 
@@ -89,6 +100,7 @@ func Init() error {
 func Cleanup() {
 	quitChan <- struct{}{}
 	C.queue_exit()
+	close(submitChan)
 }
 
 func startLoop() {
@@ -98,16 +110,25 @@ func startLoop() {
 	for {
 		select {
 		case sqe := <-submitChan:
-			ret := int(C.push_request(C.int(sqe.fd), C.long(sqe.size)))
-			if ret < 0 {
-				fmt.Printf("non-zero return code while pushing: %d\n", ret)
-				continue
+			switch sqe.code {
+			case opCodeRead:
+				ret := int(C.push_read_request(C.int(sqe.fd), C.long(sqe.size)))
+				if ret < 0 {
+					fmt.Printf("non-zero return code while pushing: %d\n", ret)
+					continue
+				}
+			case opCodeWrite:
+				ret := int(C.push_write_request(C.int(sqe.fd), unsafe.Pointer(&sqe.buf[0]), C.long(len(sqe.buf))))
+				if ret < 0 {
+					fmt.Printf("non-zero return code while pushing: %d\n", ret)
+					continue
+				}
 			}
 
 			queueSize++
 			if queueSize > 5 { // if queue_size > threshold, then pop all.
 				// TODO: maybe just pop one
-				ret = int(C.queue_submit(C.int(queueSize)))
+				ret := int(C.queue_submit(C.int(queueSize)))
 				if ret < 0 {
 					fmt.Printf("non-zero return code while submitting: %d\n", ret)
 					return
@@ -164,8 +185,8 @@ func ReadFile(path string, cb func(buf []byte)) error {
 
 	cbMut.Lock()
 	cbMap[f.Fd()] = cbInfo{
-		cb:    cb,
-		close: f.Close,
+		readCb: cb,
+		close:  f.Close,
 	}
 	cbMut.Unlock()
 
@@ -173,6 +194,26 @@ func ReadFile(path string, cb func(buf []byte)) error {
 		code: opCodeRead,
 		fd:   f.Fd(),
 		size: fi.Size(),
+	}
+	return nil
+}
+
+func WriteFile(path string, data []byte, perm os.FileMode, cb func(written int)) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	cbMut.Lock()
+	cbMap[f.Fd()] = cbInfo{
+		writeCb: cb,
+		close:   f.Close,
+	}
+	cbMut.Unlock()
+
+	submitChan <- &request{
+		code: opCodeWrite,
+		buf:  data,
+		fd:   f.Fd(),
 	}
 	return nil
 }
