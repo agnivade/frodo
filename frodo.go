@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"os"
 	"sync"
-	"time"
 	"unsafe"
 )
 
@@ -56,9 +55,11 @@ type cbInfo struct {
 	close   func() error
 }
 
+// TODO: move to local struct fields.
 var (
 	quitChan   chan struct{}
 	submitChan chan *request
+	pollChan   chan struct{}
 	cbMut      sync.RWMutex
 	cbMap      map[uintptr]cbInfo
 )
@@ -97,6 +98,7 @@ func Init() error {
 		return fmt.Errorf("queue init failed with %d exit code", ret)
 	}
 	quitChan = make(chan struct{})
+	pollChan = make(chan struct{})
 	submitChan = make(chan *request)
 	cbMap = make(map[uintptr]cbInfo)
 	go startLoop()
@@ -110,8 +112,6 @@ func Cleanup() {
 }
 
 func startLoop() {
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
 	queueSize := 0
 	for {
 		select {
@@ -146,41 +146,13 @@ func startLoop() {
 			queueSize++
 			if queueSize > queueThreshold { // if queue_size > threshold, then pop all.
 				// TODO: maybe just pop one
-				ret := int(C.queue_submit(C.int(queueSize)))
-				if ret < 0 {
-					fmt.Printf("non-zero return code while submitting: %d\n", ret)
-					return
-				}
-				for queueSize > 0 {
-					ret = int(C.pop_request())
-					if ret != 0 {
-						fmt.Printf("non-zero return code while popping: %d\n", ret)
-						if ret != EAGAIN { // Do not decrement if nothing was read.
-							queueSize--
-						}
-						continue
-					}
-					queueSize--
-				}
+				submitAndPop(queueSize)
+				queueSize = 0
 			}
-		case <-ticker.C: // some timer of some interval
+		case <-pollChan:
 			if queueSize > 0 {
-				ret := int(C.queue_submit(C.int(queueSize)))
-				if ret < 0 {
-					fmt.Printf("non-zero return code while submitting: %d\n", ret)
-					return
-				}
-				for queueSize > 0 {
-					ret := int(C.pop_request())
-					if ret != 0 {
-						fmt.Printf("non-zero return code while popping: %d\n", ret)
-						if ret != EAGAIN { // Do not decrement if nothing was read.
-							queueSize--
-						}
-						continue
-					}
-					queueSize--
-				}
+				submitAndPop(queueSize)
+				queueSize = 0
 			}
 		case <-quitChan:
 			// possibly drain channel.
@@ -223,4 +195,28 @@ func WriteFile(path string, data []byte, perm os.FileMode, cb func(written int))
 		writeCb: cb,
 	}
 	return nil
+}
+
+func Poll() {
+	// TODO: do we allow user to set wait_nr ?
+	pollChan <- struct{}{}
+}
+
+func submitAndPop(queueSize int) {
+	ret := int(C.queue_submit(C.int(queueSize)))
+	if ret < 0 {
+		fmt.Printf("non-zero return code while submitting: %d\n", ret)
+		return
+	}
+	for queueSize > 0 {
+		ret := int(C.pop_request())
+		if ret != 0 {
+			fmt.Printf("non-zero return code while popping: %d\n", ret)
+			if ret != EAGAIN { // Do not decrement if nothing was read.
+				queueSize--
+			}
+			continue
+		}
+		queueSize--
+	}
 }
