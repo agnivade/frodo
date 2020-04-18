@@ -38,16 +38,21 @@ const (
 const EAGAIN = -11
 const queueThreshold = 5
 
+type readCallback func([]byte)
+type writeCallback func(int)
+
 type request struct {
-	code opCode
-	fd   uintptr
-	buf  []byte
-	size int64
+	code    opCode
+	f       *os.File
+	buf     []byte
+	size    int64
+	readCb  readCallback
+	writeCb writeCallback
 }
 
 type cbInfo struct {
-	readCb  func([]byte)
-	writeCb func(int)
+	readCb  readCallback
+	writeCb writeCallback
 	close   func() error
 }
 
@@ -113,13 +118,25 @@ func startLoop() {
 		case sqe := <-submitChan:
 			switch sqe.code {
 			case opCodeRead:
-				ret := int(C.push_read_request(C.int(sqe.fd), C.long(sqe.size)))
+				// No need for locking here.
+				cbMap[sqe.f.Fd()] = cbInfo{
+					readCb: sqe.readCb,
+					close:  sqe.f.Close,
+				}
+
+				ret := int(C.push_read_request(C.int(sqe.f.Fd()), C.long(sqe.size)))
 				if ret < 0 {
 					fmt.Printf("non-zero return code while pushing read: %d\n", ret)
 					continue
 				}
 			case opCodeWrite:
-				ret := int(C.push_write_request(C.int(sqe.fd), unsafe.Pointer(&sqe.buf[0]), C.long(len(sqe.buf))))
+				// No need for locking here.
+				cbMap[sqe.f.Fd()] = cbInfo{
+					writeCb: sqe.writeCb,
+					close:   sqe.f.Close,
+				}
+
+				ret := int(C.push_write_request(C.int(sqe.f.Fd()), unsafe.Pointer(&sqe.buf[0]), C.long(len(sqe.buf))))
 				if ret < 0 {
 					fmt.Printf("non-zero return code while pushing write: %d\n", ret)
 					continue
@@ -184,17 +201,11 @@ func ReadFile(path string, cb func(buf []byte)) error {
 		return err
 	}
 
-	cbMut.Lock()
-	cbMap[f.Fd()] = cbInfo{
-		readCb: cb,
-		close:  f.Close,
-	}
-	cbMut.Unlock()
-
 	submitChan <- &request{
-		code: opCodeRead,
-		fd:   f.Fd(),
-		size: fi.Size(),
+		code:   opCodeRead,
+		f:      f,
+		size:   fi.Size(),
+		readCb: cb,
 	}
 	return nil
 }
@@ -204,17 +215,12 @@ func WriteFile(path string, data []byte, perm os.FileMode, cb func(written int))
 	if err != nil {
 		return err
 	}
-	cbMut.Lock()
-	cbMap[f.Fd()] = cbInfo{
-		writeCb: cb,
-		close:   f.Close,
-	}
-	cbMut.Unlock()
 
 	submitChan <- &request{
-		code: opCodeWrite,
-		buf:  data,
-		fd:   f.Fd(),
+		code:    opCodeWrite,
+		buf:     data,
+		f:       f,
+		writeCb: cb,
 	}
 	return nil
 }
