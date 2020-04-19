@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"syscall"
 	"unsafe"
 )
 
@@ -57,12 +58,14 @@ type cbInfo struct {
 
 // TODO: move to local struct fields.
 var (
+	globalMut  sync.RWMutex
 	quitChan   chan struct{}
 	submitChan chan *request
 	pollChan   chan struct{}
 	errChan    chan error
-	cbMut      sync.RWMutex
-	cbMap      map[uintptr]cbInfo
+
+	cbMut sync.RWMutex
+	cbMap map[uintptr]cbInfo
 )
 
 //export read_callback
@@ -76,7 +79,7 @@ func read_callback(iovecs *C.struct_iovec, length C.int, fd C.int) {
 	for i := 0; i < intLen; i++ {
 		_, err := buf.Write(C.GoBytes(slice[i].iov_base, C.int(slice[i].iov_len)))
 		if err != nil {
-			errChan <- fmt.Errorf("err while writing: %v", err)
+			errChan <- fmt.Errorf("error during buffer write: %v", err)
 		}
 	}
 	cbMut.RLock()
@@ -96,13 +99,15 @@ func write_callback(written C.int, fd C.int) {
 func Init() error {
 	ret := int(C.queue_init())
 	if ret < 0 {
-		return fmt.Errorf("queue init failed with %d exit code", ret)
+		return fmt.Errorf("%v", syscall.Errno(-ret))
 	}
+	globalMut.Lock()
 	quitChan = make(chan struct{})
 	pollChan = make(chan struct{})
 	errChan = make(chan error)
 	submitChan = make(chan *request)
 	cbMap = make(map[uintptr]cbInfo)
+	globalMut.Unlock()
 	go startLoop()
 	return nil
 }
@@ -115,6 +120,8 @@ func Cleanup() {
 }
 
 func Err() <-chan error {
+	globalMut.RLock()
+	defer globalMut.RUnlock()
 	return errChan
 }
 
@@ -133,7 +140,7 @@ func startLoop() {
 
 				ret := int(C.push_read_request(C.int(sqe.f.Fd()), C.long(sqe.size)))
 				if ret < 0 {
-					errChan <- fmt.Errorf("non-zero return code while pushing read: %d", ret)
+					errChan <- fmt.Errorf("error while pushing read request: %v", syscall.Errno(-ret))
 					continue
 				}
 			case opCodeWrite:
@@ -143,9 +150,17 @@ func startLoop() {
 					close:   sqe.f.Close,
 				}
 
-				ret := int(C.push_write_request(C.int(sqe.f.Fd()), unsafe.Pointer(&sqe.buf[0]), C.long(len(sqe.buf))))
+				var ptr unsafe.Pointer
+				if len(sqe.buf) == 0 {
+					zeroBytes := []byte("")
+					ptr = unsafe.Pointer(&zeroBytes)
+				} else {
+					ptr = unsafe.Pointer(&sqe.buf[0])
+				}
+
+				ret := int(C.push_write_request(C.int(sqe.f.Fd()), ptr, C.long(len(sqe.buf))))
 				if ret < 0 {
-					errChan <- fmt.Errorf("non-zero return code while pushing write: %d", ret)
+					errChan <- fmt.Errorf("error while pushing write_request: %v", syscall.Errno(-ret))
 					continue
 				}
 			}
@@ -212,14 +227,14 @@ func Poll() {
 func submitAndPop(queueSize int) {
 	ret := int(C.queue_submit(C.int(queueSize)))
 	if ret < 0 {
-		errChan <- fmt.Errorf("non-zero return code while submitting: %d", ret)
+		errChan <- fmt.Errorf("error while submitting: %v", syscall.Errno(-ret))
 		return
 	}
 	for queueSize > 0 {
 		ret := int(C.pop_request())
 		if ret != 0 {
-			errChan <- fmt.Errorf("non-zero return code while popping: %d", ret)
-			if ret != EAGAIN { // Do not decrement if nothing was read.
+			errChan <- fmt.Errorf("error while popping: %v", syscall.Errno(-ret))
+			if syscall.Errno(-ret) != syscall.EAGAIN { // Do not decrement if nothing was read.
 				queueSize--
 			}
 			continue
