@@ -1,4 +1,4 @@
-# frodo
+# frodo <a href="https://pkg.go.dev/github.com/agnivade/frodo"> <img src="https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&logoColor=white"></a>
 
 A quick POC to play with io_uring APIs using Go.
 
@@ -17,4 +17,4 @@ For a more detailed background, please read: https://kernel.dk/io_uring.pdf.
 
 ### Getting started
 
-See the docs page to get started.
+See the [docs](https://pkg.go.dev/github.com/agnivade/frodo) page to get started.
