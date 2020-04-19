@@ -1,3 +1,11 @@
+// Package frodo implements a high-level Go wrapper to perform
+// file read/write operations using liburing.
+//
+// It exposes 2 very simple ReadFile and WriteFile functions which are akin
+// to the ioutil family of functions. These calls just push an entry to the
+// submission queue. To allow the user to control when to submit the queue,
+// a Poll function is provided. The Poll function will submit the queue and wait
+// for all the entries to appear in the completion queue.
 package frodo
 
 /*
@@ -35,12 +43,12 @@ const (
 	opCodeWrite
 )
 
-const EAGAIN = -11
 const queueThreshold = 5
 
 type readCallback func([]byte)
 type writeCallback func(int)
 
+// request contains info to send to the submission queue.
 type request struct {
 	code    opCode
 	f       *os.File
@@ -96,6 +104,7 @@ func write_callback(written C.int, fd C.int) {
 	cbMut.RUnlock()
 }
 
+// Init is used to initialize the ring and setup some global state.
 func Init() error {
 	ret := int(C.queue_init())
 	if ret < 0 {
@@ -112,6 +121,7 @@ func Init() error {
 	return nil
 }
 
+// Cleanup must be called to close the ring.
 func Cleanup() {
 	quitChan <- struct{}{}
 	C.queue_exit()
@@ -119,6 +129,10 @@ func Cleanup() {
 	close(errChan)
 }
 
+// Err is a channel that needs to be read to receive internal errors
+// that can happen during interaction with the ring or during callbacks.
+// It must be read from after calling Init, otherwise the processing might
+// get stuck.
 func Err() <-chan error {
 	globalMut.RLock()
 	defer globalMut.RUnlock()
@@ -132,6 +146,7 @@ func startLoop() {
 		case sqe := <-submitChan:
 			switch sqe.code {
 			case opCodeRead:
+				// We populate the cbMap to be called later from the callback from C.
 				// No need for locking here.
 				cbMap[sqe.f.Fd()] = cbInfo{
 					readCb: sqe.readCb,
@@ -152,6 +167,8 @@ func startLoop() {
 
 				var ptr unsafe.Pointer
 				if len(sqe.buf) == 0 {
+					// In case it's a zero byte write, we explicitly take the pointer
+					// to a zero byte slice. Because we can't do &sqe.buf.
 					zeroBytes := []byte("")
 					ptr = unsafe.Pointer(&zeroBytes)
 				} else {
@@ -184,6 +201,8 @@ func startLoop() {
 	}
 }
 
+// ReadFile reads a file from the given path and returns the result as a byte slice
+// in the passed callback function.
 func ReadFile(path string, cb func(buf []byte)) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -204,6 +223,8 @@ func ReadFile(path string, cb func(buf []byte)) error {
 	return nil
 }
 
+// WriteFile writes data to a file at the given path. After the file is written,
+// it then calls the callback with the number of bytes written.
 func WriteFile(path string, data []byte, perm os.FileMode, cb func(written int)) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
 	if err != nil {
@@ -219,17 +240,21 @@ func WriteFile(path string, data []byte, perm os.FileMode, cb func(written int))
 	return nil
 }
 
+// Poll signals the kernel to read all pending entries from the submission queue
+// and waits until all entries have been read from the completion queue.
 func Poll() {
 	// TODO: do we allow user to set wait_nr ?
 	pollChan <- struct{}{}
 }
 
 func submitAndPop(queueSize int) {
+	// Submit the queue with wait_nr set to current pending queue size.
 	ret := int(C.queue_submit(C.int(queueSize)))
 	if ret < 0 {
 		errChan <- fmt.Errorf("error while submitting: %v", syscall.Errno(-ret))
 		return
 	}
+	// Pop until the queue is empty.
 	for queueSize > 0 {
 		ret := int(C.pop_request())
 		if ret != 0 {
