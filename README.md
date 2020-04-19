@@ -1,49 +1,20 @@
 # frodo
-Demo API to play with io_uring in Go
 
-1. Install liburing in your machine from latest master. (https://github.com/axboe/liburing/)
-2. Download the Go toolchain (https://golang.org/dl/)
-3. https://golang.org/doc/install#tarball
-4. Unpack the tarball into any directory.
-5. Do "go build" to ensure library builds fine.
-6. Now at the parent directory of frodo, create another directory to test the library.
-7. Go inside that.
-8. go mod init name_of_the_directory
-9. Edit the go.mod file to look like this:
-```
-module name_of_directory
+A quick POC to play with io_uring APIs using Go.
 
-go 1.14
+### Overview
 
-require github.com/agnivade/frodo v0.0.0-20200412054840-178d9973f200 // indirect
+Frodo deliberately keeps the API dead simple. Because he does not want the ring to fall into the wrong hands. It just exposes 2 very simple `ReadFile` and `WriteFile` functions which are akin to the ioutil family of functions. These calls just push an entry to the submission queue. To allow the user to control when to submit the queue, a `Poll` function is provided.
 
-replace github.com/agnivade/frodo => ../frodo
-```
+The `Poll` function will submit the queue and wait for all the entries to appear in the completion queue. Dive into the code to know more :)
 
-10. Create another file main.go like this:
-```
-package main
- 
-import (
-  "fmt"
-  "time"
+For a more detailed background, please read: https://kernel.dk/io_uring.pdf.
 
-  "github.com/agnivade/frodo"
-)
+### Pre-requisites
 
-func main() {
-  frodo.Init()
-  defer frodo.Cleanup()
+- Install liburing in your machine from latest master. (https://github.com/axboe/liburing/)
+- You need to have a modern (>=5.3) Linux kernel. It may work on older kernels too. But I have not tested it.
 
-  err := frodo.Hello("path/to/any/file")
-  if err != nil {
-    fmt.Println(err)
-  }
+### Getting started
 
-  time.Sleep(1 * time.Second)
-}
-```
-
-11. go run main.go
-
-This should print the file in the console.
+See the docs page to get started.
