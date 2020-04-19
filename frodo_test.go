@@ -159,3 +159,55 @@ func TestWrite(t *testing.T) {
 		helper("coverage.out")
 	})
 }
+
+var globalBuf []byte
+
+func BenchmarkRead(b *testing.B) {
+	b.Run("stdlib", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			buf, err := ioutil.ReadFile("testdata/zero_byte.txt")
+			if err != nil {
+				b.Error(err)
+			}
+			buf, err = ioutil.ReadFile("testdata/ssa.html")
+			if err != nil {
+				b.Error(err)
+			}
+			buf, err = ioutil.ReadFile("testdata/coverage.out")
+			if err != nil {
+				b.Error(err)
+			}
+			globalBuf = buf
+		}
+	})
+
+	b.Run("stdlib", func(b *testing.B) {
+		frodo.Init()
+		defer frodo.Cleanup()
+		go func() {
+			for err := range frodo.Err() {
+				b.Error(err)
+			}
+		}()
+		for i := 0; i < b.N; i++ {
+			err := frodo.ReadFile("testdata/zero_byte.txt", func(buf []byte) {
+				globalBuf = buf
+			})
+			if err != nil {
+				b.Error(err)
+			}
+			err = frodo.ReadFile("testdata/ssa.html", func(buf []byte) {
+				globalBuf = buf
+			})
+			if err != nil {
+				b.Error(err)
+			}
+			err = frodo.ReadFile("testdata/coverage.out", func(buf []byte) {
+				globalBuf = buf
+			})
+			if err != nil {
+				b.Error(err)
+			}
+		}
+	})
+}
