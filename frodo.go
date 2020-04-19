@@ -3,12 +3,12 @@ package frodo
 /*
 #cgo LDFLAGS: -luring
 #include <fcntl.h>
-#include <stdio.h>
-#include <string.h>
-#include <sys/stat.h>
-#include <sys/ioctl.h>
 #include <liburing.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
 
 extern int queue_init();
 extern int push_read_request(int, off_t);
@@ -60,6 +60,7 @@ var (
 	quitChan   chan struct{}
 	submitChan chan *request
 	pollChan   chan struct{}
+	errChan    chan error
 	cbMut      sync.RWMutex
 	cbMap      map[uintptr]cbInfo
 )
@@ -75,7 +76,7 @@ func read_callback(iovecs *C.struct_iovec, length C.int, fd C.int) {
 	for i := 0; i < intLen; i++ {
 		_, err := buf.Write(C.GoBytes(slice[i].iov_base, C.int(slice[i].iov_len)))
 		if err != nil {
-			fmt.Println("err while writing", err)
+			errChan <- fmt.Errorf("err while writing: %v", err)
 		}
 	}
 	cbMut.RLock()
@@ -99,6 +100,7 @@ func Init() error {
 	}
 	quitChan = make(chan struct{})
 	pollChan = make(chan struct{})
+	errChan = make(chan error)
 	submitChan = make(chan *request)
 	cbMap = make(map[uintptr]cbInfo)
 	go startLoop()
@@ -109,6 +111,11 @@ func Cleanup() {
 	quitChan <- struct{}{}
 	C.queue_exit()
 	close(submitChan)
+	close(errChan)
+}
+
+func Err() <-chan error {
+	return errChan
 }
 
 func startLoop() {
@@ -126,7 +133,7 @@ func startLoop() {
 
 				ret := int(C.push_read_request(C.int(sqe.f.Fd()), C.long(sqe.size)))
 				if ret < 0 {
-					fmt.Printf("non-zero return code while pushing read: %d\n", ret)
+					errChan <- fmt.Errorf("non-zero return code while pushing read: %d", ret)
 					continue
 				}
 			case opCodeWrite:
@@ -138,7 +145,7 @@ func startLoop() {
 
 				ret := int(C.push_write_request(C.int(sqe.f.Fd()), unsafe.Pointer(&sqe.buf[0]), C.long(len(sqe.buf))))
 				if ret < 0 {
-					fmt.Printf("non-zero return code while pushing write: %d\n", ret)
+					errChan <- fmt.Errorf("non-zero return code while pushing write: %d", ret)
 					continue
 				}
 			}
@@ -205,13 +212,13 @@ func Poll() {
 func submitAndPop(queueSize int) {
 	ret := int(C.queue_submit(C.int(queueSize)))
 	if ret < 0 {
-		fmt.Printf("non-zero return code while submitting: %d\n", ret)
+		errChan <- fmt.Errorf("non-zero return code while submitting: %d", ret)
 		return
 	}
 	for queueSize > 0 {
 		ret := int(C.pop_request())
 		if ret != 0 {
-			fmt.Printf("non-zero return code while popping: %d\n", ret)
+			errChan <- fmt.Errorf("non-zero return code while popping: %d", ret)
 			if ret != EAGAIN { // Do not decrement if nothing was read.
 				queueSize--
 			}
