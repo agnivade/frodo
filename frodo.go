@@ -90,18 +90,20 @@ func read_callback(iovecs *C.struct_iovec, length C.int, fd C.int) {
 			errChan <- fmt.Errorf("error during buffer write: %v", err)
 		}
 	}
-	cbMut.RLock()
+	cbMut.Lock()
 	cbMap[uintptr(fd)].close()
 	cbMap[uintptr(fd)].readCb(buf.Bytes())
-	cbMut.RUnlock()
+	delete(cbMap, uintptr(fd))
+	cbMut.Unlock()
 }
 
 //export write_callback
 func write_callback(written C.int, fd C.int) {
-	cbMut.RLock()
+	cbMut.Lock()
 	cbMap[uintptr(fd)].close()
 	cbMap[uintptr(fd)].writeCb(int(written))
-	cbMut.RUnlock()
+	delete(cbMap, uintptr(fd))
+	cbMut.Unlock()
 }
 
 // Init is used to initialize the ring and setup some global state.
