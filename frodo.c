@@ -43,6 +43,7 @@ int pop_request() {
         // Call write_callback to Go.
         write_callback(cqe->res, fi->file_fd);
     }
+    free(fi);
 
     // Mark as done.
     io_uring_cqe_seen(&ring, cqe);
