@@ -39,6 +39,10 @@ int pop_request() {
         }
         // Call read_callback to Go.
         read_callback(fi->iovecs, total_blocks, fi->file_fd);
+
+        for (int i=0; i < total_blocks; i++) {
+            free(fi->iovecs[i].iov_base);
+        }
     } else if (fi->opcode == IORING_OP_WRITEV) {
         // Call write_callback to Go.
         write_callback(cqe->res, fi->file_fd);
@@ -96,7 +100,6 @@ int push_read_request(int file_fd, off_t file_sz) {
 int push_write_request(int file_fd, void *data, off_t file_sz) {
     struct file_info *fi = malloc(sizeof(*fi) + (sizeof(struct iovec) * 1));
 
-    // TODO: split into multiple blocks.
     fi->iovecs[0].iov_base = data;
     fi->iovecs[0].iov_len = file_sz;
     fi->file_sz = file_sz;

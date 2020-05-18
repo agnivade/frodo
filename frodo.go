@@ -79,7 +79,6 @@ var (
 //export read_callback
 func read_callback(iovecs *C.struct_iovec, length C.int, fd C.int) {
 	// Here be dragons.
-	// defer C.free(unsafe.Pointer(iovecs)) // This makes it crash.
 	intLen := int(length)
 	slice := (*[1 << 28]C.struct_iovec)(unsafe.Pointer(iovecs))[:intLen:intLen]
 	// Can be optimized further with more unsafe.
