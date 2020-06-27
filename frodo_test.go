@@ -61,6 +61,10 @@ func TestRead(t *testing.T) {
 	t.Run("LargeFile", func(t *testing.T) {
 		helper("testdata/coverage.out")
 	})
+
+	t.Run("MultipleOf7", func(t *testing.T) {
+		helper("testdata/shire.txt")
+	})
 }
 
 func TestQueueThreshold(t *testing.T) {

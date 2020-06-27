@@ -57,8 +57,10 @@ int pop_request() {
 int push_read_request(int file_fd, off_t file_sz) {
     // aiming for 8 blocks. (https://www.oreilly.com/library/view/linux-system-programming/9781449341527/ch04.html)
     int total_blocks = INITIAL_NUM_BLOCKS;
-    off_t last_block_size = 0;
-    off_t initial_block_size = file_sz / total_blocks;
+    off_t last_block_size;
+    off_t initial_block_size;
+
+    last_block_size = initial_block_size = file_sz / total_blocks;
 
     if (initial_block_size == 0) {
         total_blocks = 0;
