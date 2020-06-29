@@ -8,6 +8,8 @@ Frodo deliberately keeps the API dead simple. Because he does not want the ring 
 
 The `Poll` function will submit the queue and wait for all the entries to appear in the completion queue. Dive into the code to know more :)
 
+For an overall explanation of the subject matter, please read: https://developers.mattermost.com/blog/hands-on-iouring-go.
+
 For a more detailed background, please read: https://kernel.dk/io_uring.pdf.
 
 ### Pre-requisites
